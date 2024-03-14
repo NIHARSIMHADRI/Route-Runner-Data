@@ -12,6 +12,33 @@ from concurrent.futures import ProcessPoolExecutor
 import time
 from api_code import api_weather_passcode
 
+def calculate_bounds(latitude, longitude, distance_miles):
+    """
+    Calculate the latitude and longitude bounds for a given distance from a point.
+    
+    Parameters:
+    - latitude (float): The starting latitude in degrees.
+    - longitude (float): The starting longitude in degrees.
+    - distance_miles (float): The distance in miles one is willing to travel from the starting point.
+    
+    Returns:
+    - A tuple containing two tuples: ((latitude_lower_bound, latitude_upper_bound), (longitude_lower_bound, longitude_upper_bound))
+    """
+    miles_per_degree_latitude = 69  # Approximate miles per degree of latitude
+    
+    # Calculate latitude bounds
+    latitude_bound_upper = latitude + (distance_miles / miles_per_degree_latitude)
+    latitude_bound_lower = latitude - (distance_miles / miles_per_degree_latitude)
+    
+    # Convert latitude to radians for cosine calculation
+    latitude_radians = radians(latitude)
+    
+    # Calculate longitude bounds, taking into account the cosine of latitude for longitude distance calculation
+    longitude_bound_upper = longitude + (distance_miles / (miles_per_degree_latitude * cos(latitude_radians)))
+    longitude_bound_lower = longitude - (distance_miles / (miles_per_degree_latitude * cos(latitude_radians)))
+    
+    return ((latitude_bound_lower, latitude_bound_upper), (longitude_bound_lower, longitude_bound_upper))
+
 
 def find_pedestrian_areas(min_lat, min_lon, max_lat, max_lon):
     overpass_url = "http://overpass-api.de/api/interpreter"
@@ -162,7 +189,7 @@ def generate_random_lat_long(min_lat, max_lat, min_long, max_long):
     return latitude, longitude
 
 
-def safety_data(scores_arr):
+def safety_data(scores_arr, min_latitude, min_longitude, max_latitude, max_longitude):
 
     safety_items = ['assault', 'robbery', 'stalking', 'gangs', 'drugs', 'vandalism', 'discrimination', 'noise']
 
@@ -178,11 +205,6 @@ def safety_data(scores_arr):
 
     crime_data = []
     weights = []
-
-    min_latitude = 37.7
-    min_longitude = -122.5
-    max_latitude = 37.9
-    max_longitude = -122.3
 
     # randomly select 200 crime incidents
     for i in range(200):
@@ -441,7 +463,6 @@ def find_optimal_path(random_groupid, goal_distance, lat_long_score_dict, count_
     curr_group = random_groupid
     
     # append initial point
-    #print(path_follower[curr_index][0])
     no_repeats.add(path_follower[curr_index][0])
     points.append((path_follower[curr_index][0], lat_long_score_dict[path_follower[curr_index][0]]))
     curr_score += lat_long_score_dict[path_follower[curr_index][0]]
@@ -451,12 +472,10 @@ def find_optimal_path(random_groupid, goal_distance, lat_long_score_dict, count_
     while curr_distance < goal_distance:
         # we can jump to one or more groups from this point
         if path_follower[curr_index][1] != -1:
-            #print("insider info : curr_index: " + str(curr_index))
             # randomly choose group to continue with
             if ((curr_index == 0 and front == False) or (curr_index == len(path_follower)-1 and front == True)):
                 # if at the end of current group force to switch to different group
                 chosen_groupid = curr_group
-                #print("before: " + str(chosen_groupid))
                 iter = 1
                 group_possibs = path_follower[curr_index][1]
 
@@ -470,17 +489,10 @@ def find_optimal_path(random_groupid, goal_distance, lat_long_score_dict, count_
                     while chosen_groupid == curr_group:
                         chosen_group = random.randint(0, len(path_follower[curr_index][1])-1)
                         chosen_groupid = path_follower[curr_index][1][chosen_group][0]
-                        # print("iter count: " + str(iter))
-                        # print("path follower is: " + str(path_follower))
-                        # print("The chosen group id is: " + str(chosen_groupid))
-                        # print("The curr group is: " + str(curr_group))
-                        # iter += 1
-                        # time.sleep(1)
                 # jump anywhere
                 else:
                     chosen_group = random.randint(0, len(path_follower[curr_index][1])-1)
                     chosen_groupid = path_follower[curr_index][1][chosen_group][0]
-                #print("after: " + str(chosen_groupid))
             # can continue with same group possibly
             else:
                 chosen_group = random.randint(0, len(path_follower[curr_index][1])-1)
@@ -495,16 +507,12 @@ def find_optimal_path(random_groupid, goal_distance, lat_long_score_dict, count_
     
                 # need to do process of reconstructing the path
                 path_follower = construct_path(curr_group, count_points, access_group, groupid_pairings)
-
-                #print()
-                #print(path_follower)
         
                 # check if index is in front, back or middle
                 if curr_index == 0:
                     front = True
                 elif curr_index == len(path_follower) - 1:
                     front = False
-                    #print(curr_index)
                 else:
                     # in middle case choose direction randomly
                     front = bool(random.getrandbits(1))
@@ -512,9 +520,6 @@ def find_optimal_path(random_groupid, goal_distance, lat_long_score_dict, count_
 
         old_index = curr_index
         next_point = 0
-    
-        #print("This is " + str(curr_index))
-        #print(path_follower[curr_index][1])
         
         if front:
             next_point = 1
@@ -1084,13 +1089,18 @@ def produce_parents(pair, distance_target, count_points, lat_long_score_dict, ac
 
 
 if __name__ == "__main__":
+    
 
-    # Example usage for an area in San Francisco
-    min_latitude = 37.7
-    min_longitude = -122.5
-    max_latitude = 37.9
-    max_longitude = -122.3
-    num_points = 15
+    # pass in points like (a, b), c, d where (a,b) represents current location as lat, long pair, c is maximum path distance in feet
+    # and d is allowed distance away from (a,b) in miles
+    curr_location_str = args[1].strip("()")  # Remove the parentheses
+    curr_location = tuple(map(float, curr_location_str.split(',')))  # Split by comma and convert to float
+    
+    # The next arguments are floats
+    path_distance_feet = float(args[2])
+    distance_away_miles = float(args[3])
+
+    (min_latitude, max_latitude), (min_longitude, max_longitude) = calculate_bounds(curr_location[0], curr_location[1], distance_away_miles)
     
     pedestrian_areas = find_pedestrian_areas(min_latitude, min_longitude, max_latitude, max_longitude)
     scores_arr = []
@@ -1103,8 +1113,9 @@ if __name__ == "__main__":
     
     closest_fountain_dists(scores_arr, water_fountains_coordinates)
     
-    safety_data(scores_arr)
-    
+    safety_data(scores_arr, min_latitude, min_longitude, max_latitude, max_longitude)
+
+    num_points = 15
     weather_points = generate_points(min_latitude, max_latitude, min_longitude, max_longitude, num_points)
     
     weather_data = []
@@ -1131,77 +1142,22 @@ if __name__ == "__main__":
     
     points_scores_and_frequencies(count_points, lat_long_score_dict, access_group, scores_arr)
     
-    all_groupids = list(groupid_pairings.keys())
-
-    # output_messages = ""
-
-    # for i in range(10000):
-    #     random_groupid = random.choice(all_groupids)
-    #     const_distance = 5000
-    
-    #     gotten_path = find_optimal_path(random_groupid, const_distance, lat_long_score_dict, count_points, access_group, groupid_pairings)
-    
-    #     print("The points are: ")
-    #     print()
-    #     print(gotten_path[0])
-    #     print("The score is: " + str(gotten_path[1]))
-    #     print("The distance is: " + str(gotten_path[2]))
-    #     output_messages += "The points are: \n\n"
-    #     output_messages += str(gotten_path[0]) + "\n\n"
-    #     output_messages += "The score is: " + str(gotten_path[1]) + "\n\n"
-    #     output_messages += "The distance is: " + str(gotten_path[2]) + "\n\n"
-
-
-    # print("done")
-        
+    all_groupids = list(groupid_pairings.keys())    
 
     random_group_id_values = []
 
     for i in range(1000):
         random_groupid = random.choice(all_groupids)
         random_group_id_values.append(random_groupid)
-    
-    # Assuming you have a list of second_param values corresponding to each individual
-    const_distance = [5000] * len(random_group_id_values)
-    
-    # Zip the population and second_params to create an iterable of tuples
-    #args = zip(random_group_id_values, const_distance)
 
     arg_values = []
 
     for i in range(len(random_group_id_values)):
-        arg_values.append((random_group_id_values[i], 5000, lat_long_score_dict, count_points, access_group, groupid_pairings))
+        arg_values.append((random_group_id_values[i], path_distance_feet, lat_long_score_dict, count_points, access_group, groupid_pairings))
     
     # Use pool.starmap to apply the fitness function with multiple arguments
     with Pool() as pool:
         fitnesses = pool.starmap(find_optimal_path, arg_values)
-        # for fitness in fitnesses:
-        #     print("The points are: ")
-        #     print()
-        #     print(fitness[0])
-        #     print("The score is: " + str(fitness[1]))
-        #     print("The distance is: " + str(fitness[2]))
-    #print(len(fitnesses))
-
-    # all_scores = []
-    # for i in range(len(fitnesses)):
-    #     all_scores.append(fitnesses[i][1])
-
-    # all_scores.sort()
-
-    # for num in all_scores:
-    #     print(num)
-
-    # print()
-
-    # all_distances = []
-    # for i in range(len(fitnesses)):
-    #     all_distances.append(fitnesses[i][2])
-
-    # all_distances.sort()
-
-    # for dist in all_distances:
-    #     print(dist)
 
     # order fitnesses by decreasing score
     fitnesses.sort(key=lambda points_scores: points_scores[1], reverse=True)
@@ -1230,7 +1186,7 @@ if __name__ == "__main__":
     children_paths = []
 
     for parent_pair in parent_pairs:
-        children_paths.append(produce_parents(parent_pair, 5000, count_points, lat_long_score_dict, access_group, groupid_pairings))
+        children_paths.append(produce_parents(parent_pair, path_distance_feet, count_points, lat_long_score_dict, access_group, groupid_pairings))
 
     # order children by decreasing score
     children_paths.sort(key=lambda points_scores: points_scores[1], reverse=True)
@@ -1260,7 +1216,7 @@ if __name__ == "__main__":
     final_children_paths = []
 
     for parent_pair in second_parent_pairs:
-        final_children_paths.append(produce_parents(parent_pair, 5000, count_points, lat_long_score_dict, access_group, groupid_pairings))
+        final_children_paths.append(produce_parents(parent_pair, path_distance_feet, count_points, lat_long_score_dict, access_group, groupid_pairings))
 
     # order children by decreasing score
     final_children_paths.sort(key=lambda points_scores: points_scores[1], reverse=True)
@@ -1272,34 +1228,4 @@ if __name__ == "__main__":
     final_gen_paths.sort(key=lambda points_scores: points_scores[1], reverse=True)
 
     print(list(final_gen_paths[0]))
-        
-
-    # print(parent_pairs)
-
-    # print()
-
-    # print(len(parent_pairs))
-
-    #produce_children(parent_pairs)
-
-
-    #print(len(mateable_parents))
-
-    #print(good_parents_test)
-
-    # parenting_list = find_good_parents(fitnesses)
-
-    # print(parenting_list)
-        
-
-    # lat_long_score_args = [lat_long_score_dict for _ in range(len(random_group_id_values))]
-    # count_points_args = [count_points for _ in range(len(random_group_id_values))]
-    # access_group_args = [access_group for _ in range(len(random_group_id_values))]
-    # groupid_pairings_args = [groupid_pairings for _ in range(len(random_group_id_values))]
-
-    # with ProcessPoolExecutor() as executor:
-    #     results = list(executor.map(find_optimal_path, random_group_id_values, const_distance, lat_long_score_args, count_points_args, access_group_args, groupid_pairings_args))
-    
-    # for result in results:
-    #     print(result)
     
